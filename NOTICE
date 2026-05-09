@@ -29,6 +29,12 @@ RAGFlow
       stack. shoppilot only consumes RAGFlow's parsing and chunking layers
       (deepdoc.parser, rag.app.qa, rag.nlp.rag_tokenizer) and does not host the
       RAGFlow service.
+    - common/token_utils.py
+      Original code set `TIKTOKEN_CACHE_DIR` to the project root, which caused
+      tiktoken to scatter 40-char hex-named BPE cache files in the working
+      directory (polluting the repo). Changed to default to `~/.cache/tiktoken`
+      (or honor an existing env var) so the cache lives in a conventional
+      user-level location.
 
   Files in vendored directories that have NOT been modified retain the original
   Apache 2.0 license headers as authored by InfiniFlow.

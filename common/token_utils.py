@@ -16,13 +16,18 @@
 
 
 import os
+from pathlib import Path
+
 import tiktoken
 
-from common.file_utils import get_project_base_directory
+# Modified by shoppilot: 原版 RAGFlow 把 TIKTOKEN_CACHE_DIR 设为
+# get_project_base_directory()（项目根），这会让 tiktoken 的 BPE 词表缓存（hash
+# 命名的 40 字符文件）落在项目根，污染工作目录、跑进 git。改用 ~/.cache/tiktoken
+# （或 env 显式指定），与其他 Python 工具的缓存约定一致。
+_default_cache = str(Path.home() / ".cache" / "tiktoken")
+os.environ.setdefault("TIKTOKEN_CACHE_DIR", _default_cache)
+Path(os.environ["TIKTOKEN_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
 
-tiktoken_cache_dir = get_project_base_directory()
-os.environ["TIKTOKEN_CACHE_DIR"] = tiktoken_cache_dir
-# encoder = tiktoken.encoding_for_model("gpt-3.5-turbo")
 encoder = tiktoken.get_encoding("cl100k_base")
 
 

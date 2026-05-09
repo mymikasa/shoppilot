@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ShopPilot
+data/chroma/
+.DS_Store
+.idea/
+.vscode/

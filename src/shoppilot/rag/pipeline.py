@@ -14,6 +14,7 @@ from pathlib import Path
 # 触发 parser 注册
 import shoppilot.rag.parsers.docx  # noqa: F401
 import shoppilot.rag.parsers.markdown  # noqa: F401
+import shoppilot.rag.parsers.pdf  # noqa: F401
 from shoppilot.config import get_settings
 from shoppilot.rag import store as _store_mod
 from shoppilot.rag.chunkers.base import Chunk

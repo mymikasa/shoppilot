@@ -1,0 +1,34 @@
+shoppilot
+Copyright 2026 mikasa
+
+This product is licensed under the MIT License (see LICENSE).
+
+================================================================================
+This product includes vendored third-party software listed below.
+================================================================================
+
+RAGFlow
+  Copyright 2025 The InfiniFlow Authors. All Rights Reserved.
+  Licensed under the Apache License, Version 2.0 (the "License").
+  You may obtain a copy of the License at:
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Vendored directories in this repository:
+    - ./rag/        (rag.app chunking templates, rag.nlp Chinese NLP utilities)
+    - ./common/     (RAGFlow shared utilities)
+    - ./deepdoc/    (DeepDoc document parsers and vision models)
+
+  Origin:
+    https://github.com/infiniflow/ragflow
+
+  Modifications by shoppilot:
+    - common/settings.py
+      Replaced with a slimmed configuration module that omits cloud storage,
+      Elasticsearch, Redis, and database connector imports so that
+      `from common import settings` does not pull in the full RAGFlow service
+      stack. shoppilot only consumes RAGFlow's parsing and chunking layers
+      (deepdoc.parser, rag.app.qa, rag.nlp.rag_tokenizer) and does not host the
+      RAGFlow service.
+
+  Files in vendored directories that have NOT been modified retain the original
+  Apache 2.0 license headers as authored by InfiniFlow.

@@ -40,6 +40,30 @@ def test_unknown_extension_raises(tmp_path: Path):
         parse_document(p)
 
 
+def test_pdf_parser_plain_mode(tmp_path: Path):
+    """生成最小 PDF 验证 deepdoc PlainParser 能跑通并产出 ParsedDocument。"""
+    reportlab_canvas = pytest.importorskip("reportlab.pdfgen.canvas")
+    from reportlab.lib.pagesizes import A4
+
+    pdf_path = tmp_path / "doc.pdf"
+    c = reportlab_canvas.Canvas(str(pdf_path), pagesize=A4)
+    c.setFont("Helvetica", 12)
+    c.drawString(72, 800, "Hello PDF Parser")
+    c.drawString(72, 770, "This is line two.")
+    c.save()
+
+    import shoppilot.rag.parsers.pdf  # noqa: F401  注册 parser
+
+    doc = parse_document(pdf_path)
+    assert doc.source_format == "pdf"
+    assert doc.meta["pdf_parser"] == "plain"
+    paragraphs = [b for b in doc.blocks if isinstance(b, Paragraph)]
+    assert paragraphs, "至少应有一个段落"
+    full = "\n".join(p.text for p in paragraphs)
+    assert "Hello PDF Parser" in full
+    assert "line two" in full
+
+
 def test_docx_parser_via_python_docx(tmp_path: Path):
     """生成最小 docx 验证 mammoth → markdown → parse 链路。"""
     docx = pytest.importorskip("docx")

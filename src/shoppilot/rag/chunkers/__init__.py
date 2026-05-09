@@ -4,6 +4,7 @@ from shoppilot.rag.chunkers.base import Chunk, Chunker
 from shoppilot.rag.chunkers.manual import ManualChunker
 from shoppilot.rag.chunkers.naive import NaiveChunker
 from shoppilot.rag.chunkers.qa import QAChunker
+from shoppilot.rag.chunkers.qa_simple import SimpleQAChunker
 
 __all__ = [
     "Chunk",
@@ -11,4 +12,5 @@ __all__ = [
     "ManualChunker",
     "NaiveChunker",
     "QAChunker",
+    "SimpleQAChunker",
 ]

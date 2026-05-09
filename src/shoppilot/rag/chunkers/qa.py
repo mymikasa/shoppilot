@@ -1,75 +1,157 @@
-"""QA 模板：FAQ 文档专用，每个"问题-答案"对独立成 chunk。
+"""QA 模板：通过 in-tree vendored 的 rag.app.qa.chunk 调用 RAGFlow 原版。
 
-约定：源文档每条 FAQ 用 H2 (`##`) 作为问题，紧随其后的内容（段落 / 列表 /
-表格 / 子标题）作为答案。一直到下一个 H2 为止。
+RAGFlow 的 QA 切分相比我们之前的简版有几个关键加成：
+- markdown：按 # 标题层级累积成"问题路径"（多级嵌套），每个叶子 chunk 保留全路径
+- docx：用 deepdoc.docx_parser 识别 docx 内的 Q/A bullet 模式（中文 Q&A 启发式）
+- pdf：用 deepdoc.pdf_parser 识别 PDF 中的问答对
+- xlsx/csv/txt：原生支持表格型 Q&A（双列 question/answer）
+- 答案部分用 markdown.markdown() 渲染保留表格 / 列表结构
 
-H1 通常是文档主题（如"物流"），作为 category 元数据。
+RAGFlow 不支持的格式（或调用失败）回退到简版 SimpleQAChunker。
 """
 
 from __future__ import annotations
 
+import logging
+import re
+from pathlib import Path
+
 from shoppilot.rag.chunkers.base import Chunk, Chunker
-from shoppilot.rag.parsers.base import (
-    ListBlock,
-    ParsedDocument,
-    Paragraph,
-    Table,
-    Title,
-)
+from shoppilot.rag.chunkers.qa_simple import SimpleQAChunker
+from shoppilot.rag.parsers.base import ParsedDocument
+
+logger = logging.getLogger(__name__)
+
+
+def _silent_callback(*_args, **_kwargs) -> None:
+    """RAGFlow chunk() 必传 callback（用来报告进度），这里做 no-op。"""
+
+
+_NLTK_RESOURCES = ("punkt_tab", "punkt", "stopwords", "wordnet")
+_nltk_ensured = False
+
+
+def _ensure_nltk_data() -> None:
+    """RAGFlow 的 rag.nlp 内部用 NLTK 切句；首次调用时按需下载数据。
+
+    幂等：下载好就缓存到 ~/nltk_data，后续调用是 no-op。
+    """
+    global _nltk_ensured
+    if _nltk_ensured:
+        return
+    try:
+        import nltk
+        for pkg in _NLTK_RESOURCES:
+            try:
+                nltk.data.find(f"tokenizers/{pkg}" if "punkt" in pkg else f"corpora/{pkg}")
+            except LookupError:
+                logger.info("downloading NLTK %s", pkg)
+                nltk.download(pkg, quiet=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("NLTK 资源准备失败: %s", e)
+    _nltk_ensured = True
+
+
+_RAGFLOW_SUPPORTED = {"md", "markdown", "mdx", "pdf", "docx", "xlsx", "xls", "csv", "txt"}
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_QA_TAB_SPLIT_RE = re.compile(r"\t+")
+_PREFIX_Q = ("问题：", "问题:", "Question: ", "Question:")
+_PREFIX_A = ("回答：", "回答:", "Answer: ", "Answer:")
+
+
+def _strip_prefix(s: str, prefixes: tuple[str, ...]) -> str:
+    for p in prefixes:
+        if s.startswith(p):
+            return s[len(p):].lstrip()
+    return s
+
+
+def _split_qa(content: str) -> tuple[str, str]:
+    """把 RAGFlow 的 'content_with_weight' 切成 (question, answer)。
+
+    RAGFlow `beAdoc` 用 \\t 分隔：'问题：xxx\\t回答：yyy'。
+    """
+    parts = _QA_TAB_SPLIT_RE.split(content, maxsplit=1)
+    if len(parts) == 2:
+        q = _strip_prefix(parts[0].strip(), _PREFIX_Q)
+        a = _strip_prefix(parts[1].strip(), _PREFIX_A)
+        return q, a
+    # 没找到分隔符 — 整段当 answer
+    return "", content.strip()
+
+
+def _strip_html(text: str) -> str:
+    """RAGFlow markdown chunker 把 answer 用 markdown.markdown() 渲染成 HTML。
+    embedding 模型对 HTML 标签不敏感，但展示给 LLM 时拿掉更整洁。"""
+    if "<" not in text:
+        return text
+    return _HTML_TAG_RE.sub("", text)
 
 
 class QAChunker(Chunker):
+    """RAGFlow QA 切分 + 元数据规范化。"""
+
     name = "qa"
 
+    def __init__(self, lang: str = "Chinese") -> None:
+        self.lang = lang
+
     def split(self, doc: ParsedDocument) -> list[Chunk]:
-        chunks: list[Chunk] = []
-        current_h1: str | None = None
-        current_q: str | None = None
-        current_q_idx = 0
-        body_parts: list[str] = []
+        suffix = Path(doc.source_path).suffix.lower().lstrip(".")
+        if suffix not in _RAGFLOW_SUPPORTED:
+            logger.debug("qa: %s 不在 RAGFlow 支持列表，回退 SimpleQAChunker", suffix)
+            return SimpleQAChunker().split(doc)
 
-        def flush():
-            nonlocal body_parts, current_q, current_q_idx
-            if current_q is None:
-                body_parts = []
-                return
-            answer = "\n\n".join(p for p in body_parts if p).strip()
+        try:
+            raw_chunks = self._invoke_ragflow(doc.source_path)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "qa: RAGFlow chunk(%s) 失败 (%s)，回退 SimpleQAChunker",
+                doc.source_path,
+                e,
+            )
+            return SimpleQAChunker().split(doc)
+
+        return self._convert(raw_chunks, doc)
+
+    def _invoke_ragflow(self, filename: str) -> list[dict]:
+        # 延迟 import：避免顶层加载 RAGFlow 全栈
+        _ensure_nltk_data()
+        from rag.app import qa as ragflow_qa
+
+        return ragflow_qa.chunk(
+            filename=filename,
+            lang=self.lang,
+            callback=_silent_callback,
+        )
+
+    def _convert(self, raw_chunks: list[dict], doc: ParsedDocument) -> list[Chunk]:
+        out: list[Chunk] = []
+        category_default = Path(doc.source_path).stem
+        for i, item in enumerate(raw_chunks):
+            content = (item.get("content_with_weight") or "").strip()
+            if not content:
+                continue
+
+            question_full, answer = _split_qa(content)
+            answer = _strip_html(answer).strip()
             if not answer:
-                # 没答案的纯问题不入库
-                body_parts = []
-                return
-            text = f"问题：{current_q}\n\n答案：{answer}"
+                continue
+
+            # markdown chunker 把 question 写成 '\n'.join(question_stack)
+            # 拆出 leaf question + 完整路径
+            question_lines = [q.strip() for q in question_full.split("\n") if q.strip()]
+            leaf_q = question_lines[-1] if question_lines else ""
+            title_path = " / ".join(question_lines)
+            category = question_lines[0] if question_lines else category_default
+
+            text = f"问题：{question_full}\n\n答案：{answer}" if question_full else answer
             meta = self._common_meta(doc) | {
-                "question": current_q,
-                "category": current_h1 or "",
-                "qa_index": current_q_idx,
+                "question": leaf_q,
+                "title_path": title_path,
+                "category": category,
+                "qa_index": i,
             }
-            chunks.append(Chunk(text=text, metadata=meta))
-            body_parts = []
-            current_q_idx += 1
-
-        for block in doc.blocks:
-            if isinstance(block, Title):
-                if block.level == 1:
-                    flush()
-                    current_h1 = block.text
-                    current_q = None
-                elif block.level == 2:
-                    flush()
-                    current_q = block.text
-                else:  # H3+ 视为答案的小标题
-                    if current_q is not None:
-                        body_parts.append(f"**{block.text}**")
-            elif isinstance(block, Paragraph):
-                if current_q is not None:
-                    body_parts.append(block.text)
-            elif isinstance(block, ListBlock):
-                if current_q is not None:
-                    bullet = "1. " if block.ordered else "- "
-                    body_parts.append("\n".join(bullet + it for it in block.items))
-            elif isinstance(block, Table):
-                if current_q is not None:
-                    body_parts.append(block.markdown or "")
-
-        flush()
-        return chunks
+            out.append(Chunk(text=text, metadata=meta))
+        return out
